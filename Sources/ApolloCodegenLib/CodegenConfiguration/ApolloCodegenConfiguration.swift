@@ -698,6 +698,20 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
     ///
     /// Defaults to `true` when compiled with Swift 6.2+, `false` otherwise.
     public let markTypesNonisolated: Bool
+    /// Whether the generated schema-level selection set protocols conform to
+    /// `Swift.CustomDebugStringConvertible`.
+    ///
+    /// Removing the conformance reduces the number of Swift protocol conformance records emitted
+    /// into the binary, which can improve app launch time for schemas with a large number of
+    /// generated selection set types. With ``SelectionSetDebugDescriptionConformance/compilationCondition(_:)``,
+    /// the conformance is emitted inside a `#if` compilation condition evaluated in the module
+    /// that compiles the generated `SchemaMetadata` file.
+    ///
+    /// `debugDescription` remains available on all selection set types regardless of this option;
+    /// only the `CustomDebugStringConvertible` conformance is affected.
+    ///
+    /// Defaults to ``SelectionSetDebugDescriptionConformance/include``.
+    public let selectionSetDebugDescriptionConformance: SelectionSetDebugDescriptionConformance
 
     /// Default property values
     public struct Default {
@@ -713,6 +727,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       public static let conversionStrategies: ConversionStrategies = .init()
       public static let pruneGeneratedFiles: Bool = true
       public static let appendSchemaTypeFilenameSuffix: Bool = false
+      public static let selectionSetDebugDescriptionConformance: SelectionSetDebugDescriptionConformance = .include
       #if compiler(>=6.2)
       public static let markTypesNonisolated: Bool = true
       #else
@@ -743,6 +758,8 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
     ///     schema type names.
     ///   - markTypesNonisolated: When `true`, generated types are marked `nonisolated` for
     ///     compatibility with Swift 6.2's default actor isolation (`@MainActor`).
+    ///   - selectionSetDebugDescriptionConformance: Whether the generated schema-level selection
+    ///     set protocols conform to `Swift.CustomDebugStringConvertible`.
     public init(
       additionalInflectionRules: [InflectionRule] = Default.additionalInflectionRules,
       deprecatedEnumCases: Composition = Default.deprecatedEnumCases,
@@ -755,7 +772,8 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       conversionStrategies: ConversionStrategies = Default.conversionStrategies,
       pruneGeneratedFiles: Bool = Default.pruneGeneratedFiles,
       appendSchemaTypeFilenameSuffix: Bool = Default.appendSchemaTypeFilenameSuffix,
-      markTypesNonisolated: Bool = Default.markTypesNonisolated
+      markTypesNonisolated: Bool = Default.markTypesNonisolated,
+      selectionSetDebugDescriptionConformance: SelectionSetDebugDescriptionConformance = Default.selectionSetDebugDescriptionConformance
     ) {
       self.additionalInflectionRules = additionalInflectionRules
       self.deprecatedEnumCases = deprecatedEnumCases
@@ -769,6 +787,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       self.pruneGeneratedFiles = pruneGeneratedFiles
       self.appendSchemaTypeFilenameSuffix = appendSchemaTypeFilenameSuffix
       self.markTypesNonisolated = markTypesNonisolated
+      self.selectionSetDebugDescriptionConformance = selectionSetDebugDescriptionConformance
     }
 
     // MARK: Codable
@@ -787,6 +806,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       case pruneGeneratedFiles
       case appendSchemaTypeFilenameSuffix
       case markTypesNonisolated
+      case selectionSetDebugDescriptionConformance
     }
 
     public init(from decoder: any Decoder) throws {
@@ -864,6 +884,12 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
           Bool.self,
           forKey: .markTypesNonisolated
         ) ?? Default.markTypesNonisolated
+
+      selectionSetDebugDescriptionConformance =
+        try values.decodeIfPresent(
+          SelectionSetDebugDescriptionConformance.self,
+          forKey: .selectionSetDebugDescriptionConformance
+        ) ?? Default.selectionSetDebugDescriptionConformance
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -881,6 +907,12 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       try container.encode(self.pruneGeneratedFiles, forKey: .pruneGeneratedFiles)
       try container.encode(self.appendSchemaTypeFilenameSuffix, forKey: .appendSchemaTypeFilenameSuffix)
       try container.encode(self.markTypesNonisolated, forKey: .markTypesNonisolated)
+      if self.selectionSetDebugDescriptionConformance != Default.selectionSetDebugDescriptionConformance {
+        try container.encode(
+          self.selectionSetDebugDescriptionConformance,
+          forKey: .selectionSetDebugDescriptionConformance
+        )
+      }
     }
   }
 
@@ -890,6 +922,67 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
   public enum Composition: String, Codable, Equatable, Sendable {
     case include
     case exclude
+  }
+
+  /// ``SelectionSetDebugDescriptionConformance`` controls whether the generated schema-level
+  /// selection set protocols (`SelectionSet`, `InlineFragment`, `MutableSelectionSet`, and
+  /// `MutableInlineFragment`) inherit `Swift.CustomDebugStringConvertible`.
+  ///
+  /// Removing the conformance reduces the number of Swift protocol conformance records emitted
+  /// into the binary, which can improve app launch time for schemas with a large number of
+  /// generated selection set types.
+  public enum SelectionSetDebugDescriptionConformance: Codable, Equatable, Sendable {
+    /// Generated selection set protocols always conform to `CustomDebugStringConvertible`.
+    case include
+    /// Generated selection set protocols never conform to `CustomDebugStringConvertible`.
+    case exclude
+    /// Generated selection set protocols conform to `CustomDebugStringConvertible` only when the
+    /// provided Swift compilation condition (for example `DEBUG`) is active in the module that
+    /// compiles the generated `SchemaMetadata` file.
+    case compilationCondition(String)
+
+    private enum CodingKeys: String, CodingKey {
+      case compilationCondition
+    }
+
+    public init(from decoder: any Decoder) throws {
+      if let container = try? decoder.singleValueContainer(),
+         let stringValue = try? container.decode(String.self) {
+        switch stringValue {
+        case "include":
+          self = .include
+        case "exclude":
+          self = .exclude
+        default:
+          throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+              codingPath: decoder.codingPath,
+              debugDescription: "Invalid SelectionSetDebugDescriptionConformance value '\(stringValue)'."
+            )
+          )
+        }
+        return
+      }
+
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      self = .compilationCondition(
+        try container.decode(String.self, forKey: .compilationCondition)
+      )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+      switch self {
+      case .include:
+        var container = encoder.singleValueContainer()
+        try container.encode("include")
+      case .exclude:
+        var container = encoder.singleValueContainer()
+        try container.encode("exclude")
+      case .compilationCondition(let condition):
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(condition, forKey: .compilationCondition)
+      }
+    }
   }
 
   /// ``ConversionStrategies`` configures rules for how to convert the names of values from the
