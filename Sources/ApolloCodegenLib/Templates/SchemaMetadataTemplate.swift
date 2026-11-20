@@ -82,23 +82,43 @@ struct SchemaMetadataTemplate: TemplateRenderer {
   }
 
   private func protocolDefinition(prefix: String?, schemaNamespace: String) -> TemplateString {
-    let accessLevel = accessControlRenderer(for: .member).render()
+    func protocols(hashableConformance: Bool) -> TemplateString {
+      let accessLevel = accessControlRenderer(for: .member).render()
+      let nonisolated = config.nonisolatedModifier
+      let prefix = prefix ?? ""
+      let conformance = hashableConformance ? " & Swift.Hashable" : ""
 
-    let nonisolated = config.nonisolatedModifier
+      return TemplateString("""
+        \(nonisolated)\(accessLevel)protocol \(prefix)SelectionSet: \(TemplateConstants.ApolloAPITargetName).SelectionSet & \(TemplateConstants.ApolloAPITargetName).RootSelectionSet\(conformance)
+        where Schema == \(schemaNamespace).SchemaMetadata {}
 
-    return TemplateString("""
-      \(nonisolated)\(accessLevel)protocol \(prefix ?? "")SelectionSet: \(TemplateConstants.ApolloAPITargetName).SelectionSet & \(TemplateConstants.ApolloAPITargetName).RootSelectionSet
-      where Schema == \(schemaNamespace).SchemaMetadata {}
+        \(nonisolated)\(accessLevel)protocol \(prefix)InlineFragment: \(TemplateConstants.ApolloAPITargetName).SelectionSet & \(TemplateConstants.ApolloAPITargetName).InlineFragment\(conformance)
+        where Schema == \(schemaNamespace).SchemaMetadata {}
 
-      \(nonisolated)\(accessLevel)protocol \(prefix ?? "")InlineFragment: \(TemplateConstants.ApolloAPITargetName).SelectionSet & \(TemplateConstants.ApolloAPITargetName).InlineFragment
-      where Schema == \(schemaNamespace).SchemaMetadata {}
+        \(nonisolated)\(accessLevel)protocol \(prefix)MutableSelectionSet: \(TemplateConstants.ApolloAPITargetName).MutableRootSelectionSet\(conformance)
+        where Schema == \(schemaNamespace).SchemaMetadata {}
 
-      \(nonisolated)\(accessLevel)protocol \(prefix ?? "")MutableSelectionSet: \(TemplateConstants.ApolloAPITargetName).MutableRootSelectionSet
-      where Schema == \(schemaNamespace).SchemaMetadata {}
+        \(nonisolated)\(accessLevel)protocol \(prefix)MutableInlineFragment: \(TemplateConstants.ApolloAPITargetName).MutableSelectionSet & \(TemplateConstants.ApolloAPITargetName).InlineFragment\(conformance)
+        where Schema == \(schemaNamespace).SchemaMetadata {}
+        """
+      )
+    }
 
-      \(nonisolated)\(accessLevel)protocol \(prefix ?? "")MutableInlineFragment: \(TemplateConstants.ApolloAPITargetName).MutableSelectionSet & \(TemplateConstants.ApolloAPITargetName).InlineFragment
-      where Schema == \(schemaNamespace).SchemaMetadata {}
-      """
-    )
+    switch config.options.selectionSetHashableConformance {
+    case .include:
+      return protocols(hashableConformance: true)
+    case .exclude:
+      return protocols(hashableConformance: false)
+    case .compilationCondition(let condition):
+      return TemplateString("""
+        #if \(condition)
+        \(protocols(hashableConformance: true))
+        #else
+        \(protocols(hashableConformance: false))
+        #endif
+        """
+      )
+    }
   }
 }
+

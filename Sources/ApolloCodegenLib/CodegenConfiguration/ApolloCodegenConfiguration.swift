@@ -698,6 +698,23 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
     ///
     /// Defaults to `true` when compiled with Swift 6.2+, `false` otherwise.
     public let markTypesNonisolated: Bool
+    /// Whether the generated schema-level selection set protocols conform to `Swift.Hashable`
+    /// (which also provides `Swift.Equatable`).
+    ///
+    /// Removing the conformance reduces the number of Swift protocol conformance records emitted
+    /// into the binary — each generated selection set type emits both a `Hashable` and an
+    /// `Equatable` conformance record — which can improve app launch time for schemas with a
+    /// large number of generated selection set types. With
+    /// ``SelectionSetHashableConformance/compilationCondition(_:)``, the conformance is emitted
+    /// inside a `#if` compilation condition evaluated in the module that compiles the generated
+    /// `SchemaMetadata` file.
+    ///
+    /// - Warning: With ``SelectionSetHashableConformance/exclude``, generated selection set types
+    ///   are not `Hashable` or `Equatable`. Code that compares selection sets with `==`, stores
+    ///   them in `Set`s/`Dictionary` keys, or otherwise requires `Hashable` will fail to compile.
+    ///
+    /// Defaults to ``SelectionSetHashableConformance/include``.
+    public let selectionSetHashableConformance: SelectionSetHashableConformance
 
     /// Default property values
     public struct Default {
@@ -713,6 +730,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       public static let conversionStrategies: ConversionStrategies = .init()
       public static let pruneGeneratedFiles: Bool = true
       public static let appendSchemaTypeFilenameSuffix: Bool = false
+      public static let selectionSetHashableConformance: SelectionSetHashableConformance = .include
       #if compiler(>=6.2)
       public static let markTypesNonisolated: Bool = true
       #else
@@ -743,6 +761,8 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
     ///     schema type names.
     ///   - markTypesNonisolated: When `true`, generated types are marked `nonisolated` for
     ///     compatibility with Swift 6.2's default actor isolation (`@MainActor`).
+    ///   - selectionSetHashableConformance: Whether the generated schema-level selection
+    ///     set protocols conform to `Swift.Hashable` and `Swift.Equatable`.
     public init(
       additionalInflectionRules: [InflectionRule] = Default.additionalInflectionRules,
       deprecatedEnumCases: Composition = Default.deprecatedEnumCases,
@@ -755,7 +775,8 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       conversionStrategies: ConversionStrategies = Default.conversionStrategies,
       pruneGeneratedFiles: Bool = Default.pruneGeneratedFiles,
       appendSchemaTypeFilenameSuffix: Bool = Default.appendSchemaTypeFilenameSuffix,
-      markTypesNonisolated: Bool = Default.markTypesNonisolated
+      markTypesNonisolated: Bool = Default.markTypesNonisolated,
+      selectionSetHashableConformance: SelectionSetHashableConformance = Default.selectionSetHashableConformance
     ) {
       self.additionalInflectionRules = additionalInflectionRules
       self.deprecatedEnumCases = deprecatedEnumCases
@@ -769,6 +790,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       self.pruneGeneratedFiles = pruneGeneratedFiles
       self.appendSchemaTypeFilenameSuffix = appendSchemaTypeFilenameSuffix
       self.markTypesNonisolated = markTypesNonisolated
+      self.selectionSetHashableConformance = selectionSetHashableConformance
     }
 
     // MARK: Codable
@@ -787,6 +809,7 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       case pruneGeneratedFiles
       case appendSchemaTypeFilenameSuffix
       case markTypesNonisolated
+      case selectionSetHashableConformance
     }
 
     public init(from decoder: any Decoder) throws {
@@ -864,6 +887,11 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
           Bool.self,
           forKey: .markTypesNonisolated
         ) ?? Default.markTypesNonisolated
+      selectionSetHashableConformance =
+        try values.decodeIfPresent(
+          SelectionSetHashableConformance.self,
+          forKey: .selectionSetHashableConformance
+        ) ?? Default.selectionSetHashableConformance
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -881,6 +909,12 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
       try container.encode(self.pruneGeneratedFiles, forKey: .pruneGeneratedFiles)
       try container.encode(self.appendSchemaTypeFilenameSuffix, forKey: .appendSchemaTypeFilenameSuffix)
       try container.encode(self.markTypesNonisolated, forKey: .markTypesNonisolated)
+      if self.selectionSetHashableConformance != Default.selectionSetHashableConformance {
+        try container.encode(
+          self.selectionSetHashableConformance,
+          forKey: .selectionSetHashableConformance
+        )
+      }
     }
   }
 
@@ -890,6 +924,69 @@ public struct ApolloCodegenConfiguration: Codable, Equatable, Sendable {
   public enum Composition: String, Codable, Equatable, Sendable {
     case include
     case exclude
+  }
+
+  /// ``SelectionSetHashableConformance`` controls whether the generated schema-level
+  /// selection set protocols (`SelectionSet`, `InlineFragment`, `MutableSelectionSet`, and
+  /// `MutableInlineFragment`) inherit `Swift.Hashable`. `Hashable` refines `Equatable`, so
+  /// this also controls the `Equatable` conformance.
+  ///
+  /// Removing the conformance reduces the number of Swift protocol conformance records emitted
+  /// into the binary — each generated selection set type emits both a `Hashable` and an
+  /// `Equatable` conformance record — which can improve app launch time for schemas with a large
+  /// number of generated selection set types.
+  public enum SelectionSetHashableConformance: Codable, Equatable, Sendable {
+    /// Generated selection set protocols always conform to `Hashable` (and `Equatable`).
+    case include
+    /// Generated selection set protocols never conform to `Hashable` or `Equatable`.
+    case exclude
+    /// Generated selection set protocols conform to `Hashable` only when the
+    /// provided Swift compilation condition (for example `DEBUG`) is active in the module that
+    /// compiles the generated `SchemaMetadata` file.
+    case compilationCondition(String)
+
+    private enum CodingKeys: String, CodingKey {
+      case compilationCondition
+    }
+
+    public init(from decoder: any Decoder) throws {
+      if let container = try? decoder.singleValueContainer(),
+         let stringValue = try? container.decode(String.self) {
+        switch stringValue {
+        case "include":
+          self = .include
+        case "exclude":
+          self = .exclude
+        default:
+          throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+              codingPath: decoder.codingPath,
+              debugDescription: "Invalid SelectionSetHashableConformance value '\(stringValue)'."
+            )
+          )
+        }
+        return
+      }
+
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      self = .compilationCondition(
+        try container.decode(String.self, forKey: .compilationCondition)
+      )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+      switch self {
+      case .include:
+        var container = encoder.singleValueContainer()
+        try container.encode("include")
+      case .exclude:
+        var container = encoder.singleValueContainer()
+        try container.encode("exclude")
+      case .compilationCondition(let condition):
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(condition, forKey: .compilationCondition)
+      }
+    }
   }
 
   /// ``ConversionStrategies`` configures rules for how to convert the names of values from the

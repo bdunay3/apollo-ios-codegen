@@ -1,3 +1,4 @@
+import Foundation
 import GraphQLCompiler
 import IR
 
@@ -52,6 +53,35 @@ extension ApolloCodegen.ConfigurationContext {
     }
     for searchPath in self.input.operationSearchPaths {
       try validate(inputSearchPath: searchPath)
+    }
+    try validate(compilationCondition: self.options.selectionSetHashableConformance)
+  }
+
+  private func validate(
+    compilationCondition conformance: ApolloCodegenConfiguration.SelectionSetHashableConformance
+  ) throws {
+    guard case let .compilationCondition(condition) = conformance else { return }
+    try validateCompilationConditionString(
+      condition,
+      optionName: "selectionSetHashableConformance"
+    )
+  }
+
+  private func validateCompilationConditionString(
+    _ condition: String,
+    optionName: String
+  ) throws {
+    let allowed = CharacterSet.alphanumerics
+      .union(CharacterSet(charactersIn: "_.!&|()<>= \t"))
+    guard
+      !condition.trimmingCharacters(in: .whitespaces).isEmpty,
+      condition.unicodeScalars.allSatisfy({ allowed.contains($0) })
+    else {
+      throw ApolloCodegen.Error.invalidConfiguration(message: """
+        Invalid compilation condition '\(condition)' in \
+        \(optionName). Provide a non-empty Swift compilation \
+        condition such as "DEBUG".
+        """)
     }
   }
 
